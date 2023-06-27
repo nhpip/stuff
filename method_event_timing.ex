@@ -15,17 +15,35 @@ defmodule MethodEventTiming do
   def compare(old), do:
     compare(old, stats(true))
 
-  def compare(old, new) do
-    old = Enum.map(old, &make_atom/1)
-    new = Enum.map(new, &make_atom/1)
-    Enum.each(new, fn {method, new_time} ->
-       old_time = Keyword.get(old, method, false)
+  def compare(old, new, ignore \\ []) do
+    old = Enum.map(old, &make_atom/1) |> Enum.filter(&(not Enum.member?(ignore, &1)))
+    new = Enum.map(new, &make_atom/1) |> Enum.filter(&(not Enum.member?(ignore, &1)))
+    res = Enum.reduce(new, {0, 0, 0, 0}, fn({method, {new_time, new_count}}, {acc_d, acc_ot, acc_nt, acc_c} = acc) ->
+       {old_time, old_count} = Keyword.get(old, method, {false, 0})
        if old_time do
-          delta = round(((old_time - new_time) / old_time) * 100)
-          IO.puts("#{method} is #{delta}% faster/slower")
+          count = round((new_count+old_count)/2)
+          delta = round(((new_time - old_time) / new_time) * 100) * -1
+          IO.puts("#{method} is #{delta}% #{f_or_s(delta)} (#{old_time},#{new_time},#{count})")
+          {acc_d + delta, acc_ot + old_time, acc_nt + new_time, acc_c + 1}
+       else
+          acc
        end
     end)
+    {deltas, old_times, new_times, count} = res
+    old_times_avg = round(old_times / count)
+    new_times_avg = round(new_times / count)
+    time_average = round(((new_times - old_times) / new_times) * 100) * -1
+    delta_average = round(deltas / count)
+    IO.puts("")
+    IO.puts("Old time total: #{old_times}, average: #{old_times_avg}")
+    IO.puts("New time total: #{new_times}, average: #{new_times_avg}")
+    IO.puts("Time average - New is #{time_average}% #{f_or_s(time_average)} than old")
+    IO.puts("Percent average - New is #{delta_average}% #{f_or_s(delta_average)} than old")
+    IO.puts("")
   end
+
+  defp f_or_s(t) when t >= 0, do: :faster
+  defp f_or_s(_ ), do: :slower
 
   def clear(), do: :ets.delete_all_objects(:method_event_timing)
 
@@ -77,8 +95,8 @@ defmodule MethodEventTiming do
 
   defp prepare_update(method, time, module) do
     quote do
-      if MethodTimes.enabled?(unquote(module)),
-         do: MethodTimes.do_update(unquote(method), unquote(time))
+      if MethodEventTiming.enabled?(unquote(module)),
+         do: MethodEventTiming.do_update(unquote(method), unquote(time))
     end
   end
 
@@ -90,7 +108,7 @@ defmodule MethodEventTiming do
     |> Enum.map(fn method ->
       time = :ets.lookup_element(:method_event_timing, {method, :time}, 2)
       count = :ets.lookup_element(:method_event_timing, {method, :count}, 2)
-      {method, round(time/count)}
+      {method, {round(time/count), count}}
     end)
   end
 
